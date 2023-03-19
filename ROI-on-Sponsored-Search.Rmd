@@ -1,0 +1,133 @@
+---
+title: "ROI-on-Sponsored-Search"
+author: "Jhan-Syuan Lin"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output: pdf_document
+header-includes:
+    - \usepackage{setspace}\doublespacing
+fontsize: 12
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Besiness Setup
+Bazaar.com is the top online store in the United States, using sponsored search advertisements on multiple platforms. It publishes advertising in response to keywords entered by online customers and divides them into branded and nonbranded categories. 'Bazaar shoes' and 'Bazaar guitar' are examples of brand keywords that include the brand name. Nonbranded keywords include generic terms such as 'shoes' and 'guitar.'
+
+Using traffic data from several platforms, bazaar's marketing team calculated a 320% ROI for sponsored search advertisements. This result is troublesome since visitors who searched for 'Bazaar' already intended to visit Bazaar.com; therefore, we question the usefulness of branded keyword advertisements. To achieve our aim of understanding the causal inference of search advertising and its efficacy, the following analysis will be performed:
+* What’s wrong with Bob’s ROI analysis?
+* Define the Treatment and Control.
+* Consider a First Difference Estimate.
+* Calculate the Difference-in-Differences.
+* Given the Treatment Effect Estimate, Fix Bob’s RoI Calculation.
+
+```{r library, results='hide', warning=FALSE, message=FALSE}
+library(dplyr)
+library(ggplot2)
+library(plm)
+
+# Set working directory to source file location
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+```
+
+# Questions
+## (a)	What is Wrong with Bob’s RoI Calculation?
+
+As case mentioned, the 12% conversion rate we observed is not purely based on sponsored traffic but on both the sponsored and organic links. Therefore, we must isolate the conversion rate for sponsored ads only to calculate the right ROI. Given the sponsored ads on branded keywords, people who would have used organic search could also use sponsored ads to reach the website. These people usually have a higher conversion rate since they are already familiar with the brand. This fact could lead to a wrong conclusion about the conversion rate in sponsored ads.
+
+Besides, the margin per conversion is $21. This number is also biased since it is calculated by a combination of both sponsored and organic links. The actual margin could even be lower for those who click on the sponsored ads since they probably are still in the awareness phase.
+
+## (b)	Define the Treatment and Control. What is the unit of observation here? Define the treatment. Which unit(s) are treated and which is / are control? 
+
+* Unit of observation: Weekly average clicks number on each platform.
+* Treatment: Suspend sponsored ad campaign `(Ans: Google platform data after week 9)`
+* Treatment Group: Average clicks number of Google platform
+* Control Group: Average clicks number of other platforms
+
+## (c)	Consider a First Difference Estimate.
+
+```{r}
+ad = read.csv("did_sponsored_ads.csv")
+ad$avg_total = ad$avg_org + ad$avg_spons
+
+hist(ad$avg_total)  # Although the y look pretty skewed
+
+# Create Dummy Variables
+ad = ad%>%mutate(after = ifelse(week<10, 0, 1))
+ad = ad%>%mutate(treatment = ifelse(id==3, 1, 0))
+
+# Create treatment subset
+google = ad%>%filter(id==3)
+
+# Calculate the mean avg_total in the two time periods(after)
+google %>%
+    group_by(after)%>%
+    summarise(avg_week_total = mean(avg_total),
+          avg_week_spons = mean(avg_spons),
+          avg_week_org = mean(avg_org))
+
+# First difference
+fd_model = lm(avg_total ~ after, data=google)
+summary(fd_model)
+```
+
+Although the histogram of total website traffic looks pretty skewed, we will stick with the non transformation model to simplify the explanation. With the first difference method, we can see that the treatment effect (no sponsored ad) causes around -1846 decrease in total web traffic for the after period of the Google platform. The % change of clicks due to the absence of sponsored ads (6544-8390) / 8390, which is around 22%. However, we must interpret this result with caution because the p-value is greater than 0.05, indicating no evidence that this treatment affects the average total click. 
+
+The reason why this number is not solely reliable is that we ignore the natural variant of the website traffic. That said, perhaps in the post-period, the website traffic shows a significantly different trend compared to the pre-period. The estimation with this model could not capture this element and hence might lead to a wrong conclusion.
+
+## (d)	Calculate the Difference-in-Differences.
+
+```{r}
+# Check Parallel Trend
+    summary(lm(avg_total ~ factor(week)*treatment, data=ad))
+    
+    # Group data by week and treatment and calculate average values for plotting
+    week_ave = ad %>% group_by(week, treatment) %>% summarise(ave_view_total = mean(avg_total),
+                                                              ave_view_org = mean(avg_org),
+                                                              ave_view_spons = mean(avg_spons))
+    
+    ggplot(week_ave, aes(x = week, y = ave_view_total, color = factor(treatment))) + 
+      geom_line() + 
+      geom_vline(xintercept = 10, linetype='dotted') + 
+      theme_bw()
+
+# Calculate the mean avg_total in the two time periods(after)
+ad %>%
+    group_by(treatment, after)%>%
+    summarise(avg_week_total = mean(avg_total),
+              avg_week_spons = mean(avg_spons),
+              avg_week_org = mean(avg_org))
+
+# Did Model
+did_model = plm(avg_total ~ treatment*after,
+                data=ad,
+                model='within',
+                effect='twoways',
+                index=c('id','week'))
+summary(did_model)
+
+# The real % Loss of clicks due to absence of sponsored ads with DiD
+# (6544-8390) / 8390 - (13330-5265) / 5265 # 175% decrease
+```
+
+Looking at the graph and the interaction terms of the dynamic DiD model, we can see that the parallel trend assumption does not hold with the data. However, we will proceed with our analysis. With the DiD model, we can discover that the difference in difference effect of the treatment is -9910.6, which is way lower than the coefficient we estimate by the First Difference method. This shows the real impact of suspending sponsored ads on branded keywords. More specifically, this DiD model captures the difference in total traffic for the post-period with and without the treatment effect, which the first difference model could not capture.
+
+## (e)	New RoI calculation.
+
+This ROI calculation is still based on the information provided by Bob (e.g the conversion rate and the margin), which might be not very accurate as we discussed in question (a).
+
+* Incremental weekly traffic attribute to sponsored ad: 9911
+* Incremental gain from these clicks: 9911 * 0.12 * 21 = 24975.72
+* Average weekly clicks from sponsored search: 6123
+* Weekly cost of sponsored search: 6123 * 0.60 = 3673.8
+
+***ROI  = (24975.72 - 3673.8) / 3673.8 = 580%***
+
+
+
+`Rev: 9910.59*2.25 = 24974`
+`Cost: Bazzar paid for 12681 sponsored ads in Week 9, 12681 * 0.6 = 7608 (call it 8000)`
+`ROI: (24974 - 8000 / 8000) ~= 215%`
+ 
+ 
